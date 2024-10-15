@@ -56,18 +56,20 @@ app.get('/produccion/:id_usuario', verifyToken, async (req, res) => {
 app.get('/produccion', verifyToken, async (req, res) => {
     try {
         const query = `
-            SELECT 
-                p.id, 
-                p.produccion_huevos, 
-                p.cantidad_bultos, 
-                p.mortalidad_gallinas, 
-                p.fecha, 
-                u.id AS usuario_id, 
-                u.nombre AS usuario_nombre,
-                g.numero_galpon AS galpon_numero
-            FROM produccion p
-            JOIN usuarios u ON p.id_usuario = u.id
-            JOIN galpon g ON p.galpon_id = g.id
+      SELECT 
+    p.id, 
+    p.produccion_huevos, 
+    p.cantidad_bultos, 
+    p.mortalidad_gallinas, 
+    p.fecha, 
+    u.id AS usuario_id, 
+    u.nombre AS usuario_nombre,
+    g.numero_galpon AS galpon_numero
+FROM produccion p
+JOIN usuarios u ON p.id_usuario = u.id
+JOIN galpon g ON p.galpon_id = g.id
+ORDER BY p.fecha ASC;  -- Ordena por fecha de menor a mayor
+
         `;
         
         const [result] = await pool.query(query);
@@ -93,6 +95,47 @@ app.get('/produccion', verifyToken, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
+//
+
+
+app.get('/produccion/agrupada', verifyToken, async (req, res) => {
+    console.log("Token verificado, ejecutando consulta..."); // Mensaje de depuración
+
+    try {
+        const query = `
+            SELECT 
+                p.fecha,
+                g.nombre AS galpon_nombre,
+                SUM(p.produccion_huevos) AS total_produccion_huevos,
+                SUM(p.cantidad_bultos) AS total_cantidad_bultos,
+                SUM(p.mortalidad_gallinas) AS total_mortalidad_gallinas
+            FROM produccion p
+            JOIN galpon g ON p.galpon_id = g.id
+            GROUP BY p.fecha, g.nombre
+            ORDER BY p.fecha, g.nombre
+        `;
+
+        const [result] = await pool.query(query);
+        console.log("Resultados de la consulta:", result); // Mensaje de depuración
+
+        if (result.length === 0) {
+            return res.status(200).json([]); // Devuelve un arreglo vacío si no hay resultados
+        }
+
+        res.status(200).json(result);
+    } catch (err) {
+        console.error("Error al ejecutar la consulta:", err); // Mensaje de error
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+
+
+
+
+
 
 
 
