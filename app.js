@@ -182,18 +182,27 @@ app.delete('/produccion/:id', verifyToken, verifyRole('administrador'), async (r
 // para registrar los usuarios
 
 // Ruta de registro de usuario
-app.post('/register', async (req, res) => {
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() }); // Guarda en memoria
+
+app.post('/register', upload.single('imagen'), async (req, res) => {
     const { nombre, cedula, edad, id_galpon, id_rol, password } = req.body;
+    const imagen = req.file ? req.file.buffer : null;
 
     try {
+        // Verifica si la imagen fue proporcionada
+        if (!imagen) {
+            return res.status(400).json({ error: 'La imagen es requerida' });
+        }
+
         // Cifrar la contraseña
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        // Guardar el usuario en la base de datos
+        // Insertar el usuario en la base de datos
         const [result] = await pool.query(
-            'INSERT INTO usuarios (nombre, cedula, edad, id_galpon, id_rol, password) VALUES (?, ?, ?, ?, ?, ?)',
-            [nombre, cedula, edad, id_galpon, id_rol, hashedPassword]
+            'INSERT INTO usuarios (nombre, cedula, edad, id_galpon, id_rol, password, imagen) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [nombre, cedula, edad, id_galpon, id_rol, hashedPassword, imagen]
         );
 
         res.status(201).json({ message: 'Usuario registrado con éxito', userId: result.insertId });
@@ -201,6 +210,7 @@ app.post('/register', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
 
 
 
@@ -225,7 +235,7 @@ app.post('/login', async (req, res) => {
 
         //TOKEN
         const token = jwt.sign(
-            { id_usuario: user.id, nombre: user.nombre, rol: user.id_rol,galpon_id: user.id_galpon }, // Información a codificar en el token
+            { id_usuario: user.id, nombre: user.nombre, rol: user.id_rol,galpon_id: user.id_galpon,cedula:user.cedula,edad:user.edad,imagen:user.imagen}, // Información a codificar en el token
             'secret_key', // Clave secreta para firmar el token
             { expiresIn: '1h' } // Tiempo de expiración del token
         );
