@@ -43,7 +43,8 @@ app.get('/produccion/:id_usuario', verifyToken, async (req, res) => {
                 g.saldo_aves 
             FROM produccion p
             JOIN galpon g ON p.galpon_id = g.id
-            WHERE p.id_usuario = ?; `;
+            WHERE p.id_usuario = ?
+            `;
 
         const [result] = await pool.query(query, [id_usuario]);
         const formattedResult = result.map(item => ({
@@ -114,7 +115,7 @@ app.get('/produccion', verifyToken, async (req, res) => {
             FROM produccion p
             JOIN usuarios u ON p.id_usuario = u.id
             JOIN galpon g ON p.galpon_id = g.id
-            ORDER BY p.id DESC;  -- Ordena por fecha de menor a mayor
+            ORDER BY p.fecha DESC;  -- Ordena por fecha de menor a mayor
         `;
         
         const [result] = await pool.query(query);
@@ -324,6 +325,18 @@ app.put('/produccion/:id', verifyToken, verifyRole('administrador'), async (req,
     const { produccion_huevos, cantidad_bultos, mortalidad_gallinas } = req.body;
 
     try {
+        // Obtener los valores actuales de la producción
+        const [currentData] = await pool.query(
+            'SELECT mortalidad_gallinas FROM produccion WHERE id = ?',
+            [id]
+        );
+
+        if (currentData.length === 0) {
+            return res.status(404).json({ error: 'Producción no encontrada' });
+        }
+
+        const currentMortalidadGallinas = parseFloat(currentData[0].mortalidad_gallinas);
+
         // Actualizar la producción
         const [result] = await pool.query(
             'UPDATE produccion SET produccion_huevos = ?, cantidad_bultos = ?, mortalidad_gallinas = ? WHERE id = ?',
@@ -333,44 +346,6 @@ app.put('/produccion/:id', verifyToken, verifyRole('administrador'), async (req,
         if (result.affectedRows === 0) {
             return res.status(404).json({ error: 'Producción no encontrada' });
         }
-
-        // Actualizar salida_inventario en la tabla consumo_inventario
-        const [consumoResult] = await pool.query(
-            'UPDATE consumo_inventario SET salida_inventario = ? WHERE id_produccion = ?',
-            [cantidad_bultos, id]
-        );
-
-        if (consumoResult.affectedRows === 0) {
-            return res.status(404).json({ error: 'No se encontró el inventario correspondiente para actualizar' });
-        }
-
-        // Obtener el inventario actual para recalcular el saldo
-        const [saldoData] = await pool.query(
-            'SELECT inventario_inicial, entrada_inventario, salida_inventario FROM consumo_inventario WHERE id_produccion = ?',
-            [id]
-        );
-
-        if (saldoData.length === 0) {
-            return res.status(404).json({ error: 'No se encontró el consumo para actualizar el saldo' });
-        }
-
-        const inventario_inicial = parseFloat(saldoData[0].inventario_inicial);
-        const entrada_inventario = parseFloat(saldoData[0].entrada_inventario);
-        const salida_inventario = parseFloat(saldoData[0].salida_inventario);
-
-        // Verificar si los valores son válidos
-        if (isNaN(inventario_inicial) || isNaN(entrada_inventario) || isNaN(salida_inventario)) {
-            return res.status(400).json({ error: 'Datos inválidos para el cálculo del saldo' });
-        }
-
-        // Calcular el nuevo saldo correctamente
-        const nuevo_saldo = inventario_inicial + entrada_inventario - salida_inventario;
-
-        // Actualizar el saldo en la tabla consumo_inventario
-        await pool.query(
-            'UPDATE consumo_inventario SET saldo = ? WHERE id_produccion = ?',
-            [nuevo_saldo, id]
-        );
 
         // Obtener galpon_id y saldo_aves actual desde la tabla galpon relacionada con el id de produccion
         const [galponData] = await pool.query(
@@ -387,8 +362,18 @@ app.put('/produccion/:id', verifyToken, verifyRole('administrador'), async (req,
 
         const { galpon_id, saldo_aves: saldoAvesActual } = galponData[0];
 
-        // Calcular el nuevo saldo de aves restando la mortalidad
-        const nuevoSaldoAves = saldoAvesActual - mortalidad_gallinas;
+        // Calcular el nuevo saldo de aves
+        let nuevoSaldoAves = saldoAvesActual;
+
+        if (mortalidad_gallinas < currentMortalidadGallinas) {
+            // Si la nueva mortalidad es menor que la anterior, sumamos la diferencia al saldo de aves
+            const excedente = currentMortalidadGallinas - mortalidad_gallinas;
+            nuevoSaldoAves += excedente;
+        } else {
+            // Si la nueva mortalidad es mayor o igual que la anterior, restamos la diferencia
+            nuevoSaldoAves -= (mortalidad_gallinas - currentMortalidadGallinas);
+        }
+
         if (nuevoSaldoAves < 0) {
             return res.status(400).json({ error: 'La mortalidad de gallinas excede el saldo actual de aves' });
         }
@@ -405,11 +390,9 @@ app.put('/produccion/:id', verifyToken, verifyRole('administrador'), async (req,
             porcentaje = 10000; // Límite máximo arbitrario
         }
 
-        // Actualizar el porcentaje en la tabla produccion
-      
         // Obtener el rango_pro para la fecha actual
         const [rangoProData] = await pool.query(
-            'SELECT rango_pro FROM porcentaje WHERE fecha = fecha'
+            'SELECT rango_pro FROM porcentaje WHERE fecha = CURDATE()'
         );
 
         // Determinar el color según el rango
@@ -417,14 +400,12 @@ app.put('/produccion/:id', verifyToken, verifyRole('administrador'), async (req,
         if (rangoProData.length > 0 && porcentaje >= rangoProData[0].rango_pro) {
             color = 'green';
         }
-        console.log('Rango Pro Data:', rangoProData);
 
-   // Actualizar el porcentaje y color en la tabla produccion
-            await pool.query(
-                'UPDATE produccion SET porcentaje = ?, color = ? WHERE id = ?',
-                [porcentaje, color, id]
-            );
-
+        // Actualizar el porcentaje y color en la tabla produccion
+        await pool.query(
+            'UPDATE produccion SET porcentaje = ?, color = ? WHERE id = ?',
+            [porcentaje, color, id]
+        );
 
         res.status(200).json({
             message: 'Producción, inventario y saldo de aves actualizados correctamente',
